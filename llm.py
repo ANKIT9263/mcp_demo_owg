@@ -92,14 +92,22 @@ class ChatMMC:
 
             response.raise_for_status()
 
-            # Parse response - format: {"choices": [{"message": {"content": "..."}}]}
+            # Parse response
             result = response.json()
 
             # Extract content from the response structure
+            # Response format: {"choices": [{"message": {"content": ...}}]}
             if "choices" in result and len(result["choices"]) > 0:
                 choice = result["choices"][0]
                 if "message" in choice and "content" in choice["message"]:
-                    return choice["message"]["content"]
+                    content = choice["message"]["content"]
+
+                    # Content can be a string or dict/JSON object
+                    # Return as-is (dict or string)
+                    if isinstance(content, dict):
+                        # If content is a dict, convert to JSON string for langchain compatibility
+                        return json.dumps(content)
+                    return str(content) if content is not None else ""
 
             # If structure doesn't match, raise error with actual response
             raise RuntimeError(f"Unexpected API response format. Response: {json.dumps(result)[:500]}")
