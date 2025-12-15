@@ -2,6 +2,7 @@ import os
 import requests
 from typing import List, Dict, Any, Optional
 import json
+import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,27 +34,51 @@ class ChatMMC:
             max_tokens: Maximum tokens to generate
             **kwargs: Additional parameters
         """
-        # Load from environment variables with fallbacks
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("ORG_LLM_API_KEY")
-        self.model = model or os.getenv("OPENAI_MODEL") or os.getenv("ORG_LLM_MODEL") or "mmc-tech-gpt-41-1m-2025-04-14"
-        self.base_url = base_url or os.getenv("ORG_LLM_BASE_URL") or "https://stg1.mmc-dallas-int-non-prod-ingress.mgti.mmc.com/coreapi/openai/v1"
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.endpoint = f"{self.base_url}/deployments/{self.model}/chat/completions"
-        self.kwargs = kwargs
+        try:
+            # Load from environment variables with fallbacks
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("ORG_LLM_API_KEY")
+            self.model = model or os.getenv("OPENAI_MODEL") or os.getenv("ORG_LLM_MODEL") or "mmc-tech-gpt-41-1m-2025-04-14"
+            self.base_url = base_url or os.getenv("ORG_LLM_BASE_URL") or "https://stg1.mmc-dallas-int-non-prod-ingress.mgti.mmc.com/coreapi/openai/v1"
+            self.temperature = temperature
+            self.max_tokens = max_tokens
+            self.endpoint = f"{self.base_url}/deployments/{self.model}/chat/completions"
+            self.kwargs = kwargs
 
-        if not self.api_key:
-            raise ValueError("API key must be provided either as parameter or via OPENAI_API_KEY/ORG_LLM_API_KEY environment variable")
+            if not self.api_key:
+                print(f"\n{'='*60}")
+                print(f"❌ INITIALIZATION ERROR")
+                print(f"{'='*60}")
+                print(f"API key is required but not provided")
+                print(f"\nChecked environment variables:")
+                print(f"  OPENAI_API_KEY: {'Set' if os.getenv('OPENAI_API_KEY') else 'Not set'}")
+                print(f"  ORG_LLM_API_KEY: {'Set' if os.getenv('ORG_LLM_API_KEY') else 'Not set'}")
+                print(f"\nPlease provide API key via:")
+                print(f"  1. Constructor parameter: ChatMMC(api_key='your-key')")
+                print(f"  2. Environment variable: OPENAI_API_KEY or ORG_LLM_API_KEY")
+                print(f"{'='*60}\n")
+                raise ValueError("API key must be provided either as parameter or via OPENAI_API_KEY/ORG_LLM_API_KEY environment variable")
 
-        # Log initialization
-        print(f"\n{'='*60}")
-        print(f"ChatMMC Initialized")
-        print(f"{'='*60}")
-        print(f"Model: {self.model}")
-        print(f"Endpoint: {self.endpoint}")
-        print(f"API Key: {self.api_key[:10]}...{self.api_key[-4:] if len(self.api_key) > 14 else '***'}")
-        print(f"Temperature: {self.temperature}")
-        print(f"{'='*60}\n")
+            # Log initialization
+            print(f"\n{'='*60}")
+            print(f"ChatMMC Initialized")
+            print(f"{'='*60}")
+            print(f"Model: {self.model}")
+            print(f"Endpoint: {self.endpoint}")
+            print(f"API Key: {self.api_key[:10]}...{self.api_key[-4:] if len(self.api_key) > 14 else '***'}")
+            print(f"Temperature: {self.temperature}")
+            print(f"{'='*60}\n")
+
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ INITIALIZATION ERROR")
+            print(f"{'='*60}")
+            print(f"Failed to initialize ChatMMC")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise
 
     def invoke(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """
@@ -154,17 +179,134 @@ class ChatMMC:
 
             # If structure doesn't match, raise error with actual response
             error_msg = f"Unexpected API response format. Response: {json.dumps(result)[:500]}"
-            print(f"\n❌ ERROR: {error_msg}\n")
+            print(f"\n{'='*60}")
+            print(f"❌ ERROR: Unexpected API Response Format")
+            print(f"{'='*60}")
+            print(f"Expected structure: {{'choices': [{{'message': {{'content': '...'}}}}]}}")
+            print(f"Actual response keys: {list(result.keys())}")
+            print(f"Full response: {json.dumps(result, indent=2)}")
+            print(f"{'='*60}\n")
             raise RuntimeError(error_msg)
 
+        except requests.exceptions.HTTPError as e:
+            print(f"\n{'='*60}")
+            print(f"❌ HTTP ERROR")
+            print(f"{'='*60}")
+            print(f"Status Code: {response.status_code}")
+            print(f"Reason: {response.reason}")
+            print(f"URL: {self.endpoint}")
+            print(f"\nResponse Headers:")
+            for key, value in response.headers.items():
+                print(f"  {key}: {value}")
+            print(f"\nResponse Body:")
+            try:
+                print(response.text[:2000])
+                if len(response.text) > 2000:
+                    print("... (truncated)")
+            except:
+                print("(Unable to decode response body)")
+            print(f"\nException Details: {str(e)}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"HTTP Error {response.status_code}: {str(e)}")
+
+        except requests.exceptions.ConnectionError as e:
+            print(f"\n{'='*60}")
+            print(f"❌ CONNECTION ERROR")
+            print(f"{'='*60}")
+            print(f"Failed to connect to: {self.endpoint}")
+            print(f"Error: {str(e)}")
+            print(f"\nPossible causes:")
+            print(f"  - Network connectivity issues")
+            print(f"  - Invalid endpoint URL")
+            print(f"  - Firewall blocking the connection")
+            print(f"  - API server is down")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"Connection failed: {str(e)}")
+
+        except requests.exceptions.Timeout as e:
+            print(f"\n{'='*60}")
+            print(f"❌ TIMEOUT ERROR")
+            print(f"{'='*60}")
+            print(f"Request timed out after 60 seconds")
+            print(f"Endpoint: {self.endpoint}")
+            print(f"Error: {str(e)}")
+            print(f"\nPossible causes:")
+            print(f"  - API server is slow to respond")
+            print(f"  - Network latency issues")
+            print(f"  - Request payload too large")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"Request timeout: {str(e)}")
+
         except requests.exceptions.RequestException as e:
-            error_msg = f"API request failed: {str(e)}"
-            print(f"\n❌ ERROR: {error_msg}\n")
-            raise RuntimeError(error_msg)
+            print(f"\n{'='*60}")
+            print(f"❌ REQUEST ERROR")
+            print(f"{'='*60}")
+            print(f"Request failed: {str(e)}")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Endpoint: {self.endpoint}")
+            print(f"\nRequest Details:")
+            print(f"  Method: POST")
+            print(f"  Headers: {headers}")
+            print(f"  Payload: {json.dumps(payload, indent=2)[:500]}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"API request failed: {str(e)}")
+
         except json.JSONDecodeError as e:
-            error_msg = f"Failed to parse API response as JSON: {str(e)}"
-            print(f"\n❌ ERROR: {error_msg}\n")
-            raise RuntimeError(error_msg)
+            print(f"\n{'='*60}")
+            print(f"❌ JSON DECODE ERROR")
+            print(f"{'='*60}")
+            print(f"Failed to parse API response as JSON")
+            print(f"Error: {str(e)}")
+            print(f"Line: {e.lineno}, Column: {e.colno}")
+            print(f"\nRaw Response:")
+            try:
+                print(response.text[:2000])
+                if len(response.text) > 2000:
+                    print("... (truncated)")
+            except:
+                print("(Unable to get response text)")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"Failed to parse JSON response: {str(e)}")
+
+        except KeyError as e:
+            print(f"\n{'='*60}")
+            print(f"❌ KEY ERROR")
+            print(f"{'='*60}")
+            print(f"Missing expected key in response: {str(e)}")
+            print(f"\nResponse structure:")
+            try:
+                print(json.dumps(result, indent=2))
+            except:
+                print("(Unable to display response)")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"Missing key in API response: {str(e)}")
+
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ UNEXPECTED ERROR")
+            print(f"{'='*60}")
+            print(f"An unexpected error occurred")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"\nContext:")
+            print(f"  Endpoint: {self.endpoint}")
+            print(f"  Model: {self.model}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"Unexpected error: {str(e)}")
 
     def _format_messages(self, messages: List[Any]) -> List[Dict[str, str]]:
         """
@@ -179,59 +321,87 @@ class ChatMMC:
         """
         print(f"\nFormatting {len(messages)} messages...")
         formatted = []
-        for idx, msg in enumerate(messages, 1):
-            if isinstance(msg, dict):
-                # Already a dictionary
-                print(f"  Message {idx}: Dict format - role={msg.get('role', 'unknown')}")
-                formatted.append(msg)
-            elif isinstance(msg, tuple) and len(msg) == 2:
-                # Tuple format: (role, content)
-                role = msg[0] if msg[0] in ["system", "user", "assistant"] else "user"
-                print(f"  Message {idx}: Tuple format - role={role}")
-                formatted.append({
-                    "role": role,
-                    "content": msg[1]
-                })
-            else:
-                # Handle LangChain message objects
-                msg_type = type(msg).__name__.lower()
-                content = getattr(msg, "content", None)
 
-                if content is None:
-                    # Try alternative content attribute
-                    content = str(msg)
+        try:
+            for idx, msg in enumerate(messages, 1):
+                try:
+                    if isinstance(msg, dict):
+                        # Already a dictionary
+                        print(f"  Message {idx}: Dict format - role={msg.get('role', 'unknown')}")
+                        formatted.append(msg)
+                    elif isinstance(msg, tuple) and len(msg) == 2:
+                        # Tuple format: (role, content)
+                        role = msg[0] if msg[0] in ["system", "user", "assistant"] else "user"
+                        print(f"  Message {idx}: Tuple format - role={role}")
+                        formatted.append({
+                            "role": role,
+                            "content": msg[1]
+                        })
+                    else:
+                        # Handle LangChain message objects
+                        msg_type = type(msg).__name__.lower()
+                        content = getattr(msg, "content", None)
 
-                # Map LangChain message types to roles
-                role = "user"  # default
-                if "system" in msg_type:
-                    role = "system"
-                elif "human" in msg_type or "user" in msg_type:
-                    role = "user"
-                elif "ai" in msg_type or "assistant" in msg_type:
-                    role = "assistant"
-                elif hasattr(msg, "type"):
-                    # Try type attribute
-                    role_mapping = {
-                        "system": "system",
-                        "human": "user",
-                        "ai": "assistant",
-                        "user": "user",
-                        "assistant": "assistant"
-                    }
-                    role = role_mapping.get(msg.type, "user")
-                elif hasattr(msg, "role"):
-                    # Try role attribute
-                    role = msg.role
+                        if content is None:
+                            # Try alternative content attribute
+                            content = str(msg)
 
-                print(f"  Message {idx}: LangChain {msg_type} - role={role}")
+                        # Map LangChain message types to roles
+                        role = "user"  # default
+                        if "system" in msg_type:
+                            role = "system"
+                        elif "human" in msg_type or "user" in msg_type:
+                            role = "user"
+                        elif "ai" in msg_type or "assistant" in msg_type:
+                            role = "assistant"
+                        elif hasattr(msg, "type"):
+                            # Try type attribute
+                            role_mapping = {
+                                "system": "system",
+                                "human": "user",
+                                "ai": "assistant",
+                                "user": "user",
+                                "assistant": "assistant"
+                            }
+                            role = role_mapping.get(msg.type, "user")
+                        elif hasattr(msg, "role"):
+                            # Try role attribute
+                            role = msg.role
 
-                formatted.append({
-                    "role": role,
-                    "content": content
-                })
+                        print(f"  Message {idx}: LangChain {msg_type} - role={role}")
 
-        print(f"✓ Successfully formatted {len(formatted)} messages")
-        return formatted
+                        formatted.append({
+                            "role": role,
+                            "content": content
+                        })
+
+                except Exception as e:
+                    print(f"\n{'='*60}")
+                    print(f"❌ ERROR: Failed to format message {idx}")
+                    print(f"{'='*60}")
+                    print(f"Message Type: {type(msg).__name__}")
+                    print(f"Message Value: {str(msg)[:200]}")
+                    print(f"Error: {str(e)}")
+                    print(f"\nStack Trace:")
+                    traceback.print_exc()
+                    print(f"{'='*60}\n")
+                    raise ValueError(f"Failed to format message {idx}: {str(e)}")
+
+            print(f"✓ Successfully formatted {len(formatted)} messages")
+            return formatted
+
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ ERROR: Message Formatting Failed")
+            print(f"{'='*60}")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"Total messages: {len(messages)}")
+            print(f"Successfully formatted: {len(formatted)}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise
 
     def predict(self, text: str, **kwargs) -> str:
         """
@@ -244,12 +414,25 @@ class ChatMMC:
         Returns:
             The assistant's response
         """
-        print(f"\n{'='*60}")
-        print(f"ChatMMC Predict Called")
-        print(f"{'='*60}")
-        print(f"Input Text: {text[:100]}{'...' if len(text) > 100 else ''}")
-        messages = [{"role": "user", "content": text}]
-        return self.invoke(messages, **kwargs)
+        try:
+            print(f"\n{'='*60}")
+            print(f"ChatMMC Predict Called")
+            print(f"{'='*60}")
+            print(f"Input Text: {text[:100]}{'...' if len(text) > 100 else ''}")
+            messages = [{"role": "user", "content": text}]
+            return self.invoke(messages, **kwargs)
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ PREDICT ERROR")
+            print(f"{'='*60}")
+            print(f"Failed to predict")
+            print(f"Input text: {text[:200]}")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise
 
     def __call__(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """
@@ -262,10 +445,22 @@ class ChatMMC:
         Returns:
             The assistant's response
         """
-        print(f"\n{'='*60}")
-        print(f"ChatMMC Called Directly (__call__)")
-        print(f"{'='*60}")
-        return self.invoke(messages, **kwargs)
+        try:
+            print(f"\n{'='*60}")
+            print(f"ChatMMC Called Directly (__call__)")
+            print(f"{'='*60}")
+            return self.invoke(messages, **kwargs)
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ CALL ERROR")
+            print(f"{'='*60}")
+            print(f"Failed to call ChatMMC")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise
 
     def stream(self, messages: List[Dict[str, str]], **kwargs):
         """
@@ -279,14 +474,26 @@ class ChatMMC:
         Yields:
             Chunks of the response
         """
-        print(f"\n{'='*60}")
-        print(f"ChatMMC Stream Called")
-        print(f"{'='*60}")
-        print(f"Note: Streaming not yet implemented, returning full response")
-        # For now, just return the full response
-        # Implement actual streaming if the API supports it
-        response = self.invoke(messages, **kwargs)
-        yield response
+        try:
+            print(f"\n{'='*60}")
+            print(f"ChatMMC Stream Called")
+            print(f"{'='*60}")
+            print(f"Note: Streaming not yet implemented, returning full response")
+            # For now, just return the full response
+            # Implement actual streaming if the API supports it
+            response = self.invoke(messages, **kwargs)
+            yield response
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ STREAM ERROR")
+            print(f"{'='*60}")
+            print(f"Failed to stream response")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise
 
 
 # Example usage
