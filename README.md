@@ -12,7 +12,7 @@ A multi-step tool orchestration system using the Model Context Protocol (MCP), L
 
 ## 📋 Prerequisites
 
-- Python 3.8+
+- Python 3
 - OpenAI API Key
 
 ## 🚀 Installation
