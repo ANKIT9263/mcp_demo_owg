@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Callable
 
 from dotenv import load_dotenv
 from fastmcp.client import Client
@@ -12,164 +12,253 @@ from langchain.schema.output_parser import StrOutputParser
 
 load_dotenv()
 
-MCP_ENDPOINT = "http://localhost:8080/mcp"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL")
 
-# --------------------------------------------------
-# LANGCHAIN-SAFE MULTI-STEP PLANNER PROMPT
-# --------------------------------------------------
-PLANNER_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            (
-                "You are a planner.\n"
-                "Break the user query into ordered tool steps.\n\n"
-                "Rules:\n"
-                "- Return ONLY valid JSON\n"
-                "- Output must be a JSON list\n"
-                "- Each item must contain: tool, args\n"
-                "- If a step depends on the previous result, "
-                "use the literal string PREVIOUS_RESULT as a value\n"
-            ),
-        ),
-        (
-            "user",
-            (
-                "Available tools:\n{tools}\n\n"
-                "User query:\n{query}\n\n"
-                "Return the execution steps now."
-            ),
-        ),
-    ]
-)
-
-
-async def run_client(user_query: str, stream_callback=None):
+class MCPAgentOrchestrator:
     """
-    Run client with optional streaming callback.
-    stream_callback: async function(event_type: str, data: dict)
+    Orchestrates multi-step tool execution via MCP server
     """
-    async def emit(event_type: str, data: dict):
-        if stream_callback:
-            await stream_callback(event_type, data)
 
-    llm = ChatOpenAI(
-        model=OPENAI_MODEL,
-        temperature=0,
-        api_key=OPENAI_API_KEY,
+    PLANNER_PROMPT = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "You are a planner.\n"
+                    "Break the user query into ordered tool steps.\n\n"
+                    "Rules:\n"
+                    "- Return ONLY valid JSON\n"
+                    "- Output must be a JSON list\n"
+                    "- Each item must contain: tool, args\n"
+                    "- If a step depends on the previous result, "
+                    "use the literal string PREVIOUS_RESULT as a value\n"
+                ),
+            ),
+            (
+                "user",
+                (
+                    "Available tools:\n{tools}\n\n"
+                    "User query:\n{query}\n\n"
+                    "Return the execution steps now."
+                ),
+            ),
+        ]
     )
 
-    client = Client(MCP_ENDPOINT)
+    def __init__(
+        self,
+        mcp_endpoint: str = "http://localhost:8080/mcp",
+        openai_api_key: Optional[str] = None,
+        openai_model: Optional[str] = None,
+    ):
+        """Initialize the orchestrator"""
+        self.mcp_endpoint = mcp_endpoint
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.openai_model = openai_model or os.getenv("OPENAI_MODEL")
+        self.stream_callback: Optional[Callable] = None
 
-    async with client:
-        # --------------------------------------------------
-        # 1. LIST TOOLS
-        # --------------------------------------------------
-        tools = await client.list_tools()
+    async def _emit(self, event_type: str, data: Dict[str, Any]):
+        """Emit event to stream callback if provided"""
+        if self.stream_callback:
+            await self.stream_callback(event_type, data)
+
+    def _format_tools_list(self, tools: List) -> str:
+        """Format tools into human-readable list for LLM"""
         tool_lines = []
-
-        for t in tools:
-            schema = getattr(t, "inputSchema", {}) or {}
+        for tool in tools:
+            schema = getattr(tool, "inputSchema", {}) or {}
             props = schema.get("properties", {}) or {}
             args = ", ".join(props.keys()) if props else "no_args"
-            tool_lines.append(f"- {t.name}({args})")
+            tool_lines.append(f"- {tool.name}({args})")
+        return "\n".join(tool_lines)
 
-        tools_text = "\n".join(tool_lines)
-
-        # --------------------------------------------------
-        # 2. PLAN (MULTI-STEP)
-        # --------------------------------------------------
-        chain = PLANNER_PROMPT | llm | StrOutputParser()
-        raw_plan = await chain.ainvoke(
-            {
-                "tools": tools_text,
-                "query": user_query,
-            }
-        )
+    def _parse_plan_response(self, raw_plan: str) -> List[Dict[str, Any]]:
+        """Parse and clean LLM response, handling markdown code blocks"""
+        cleaned_plan = raw_plan.strip()
 
         # Strip markdown code blocks if present
-        cleaned_plan = raw_plan.strip()
         if cleaned_plan.startswith("```"):
-            # Remove opening ```json or ```
             lines = cleaned_plan.split('\n')
             lines = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
             cleaned_plan = '\n'.join(lines)
 
+        return json.loads(cleaned_plan)
+
+    async def generate_plan(
+        self,
+        query: str,
+        tools: List,
+        tools_text: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Generate execution plan from user query"""
+        llm = ChatOpenAI(
+            model=self.openai_model,
+            temperature=0,
+            api_key=self.openai_api_key,
+        )
+
+        chain = self.PLANNER_PROMPT | llm | StrOutputParser()
+        raw_plan = await chain.ainvoke({
+            "tools": tools_text,
+            "query": query,
+        })
+
         try:
-            plan: List[Dict[str, Any]] = json.loads(cleaned_plan)
+            plan = self._parse_plan_response(raw_plan)
+            print("\n🧠 Execution Plan:")
+            print(json.dumps(plan, indent=2))
+            await self._emit("plan", {"plan": plan})
+            return plan
         except Exception as e:
             error_msg = f"❌ Invalid planner output: {str(e)}"
             print(error_msg)
             print(raw_plan)
-            await emit("error", {"message": error_msg, "raw_output": raw_plan})
-            return
+            await self._emit("error", {"message": error_msg, "raw_output": raw_plan})
+            return None
 
-        print("\n🧠 Execution Plan:")
-        print(json.dumps(plan, indent=2))
-        await emit("plan", {"plan": plan})
+    def _normalize_args(
+        self,
+        raw_args: Any,
+        properties: List[str],
+        tool_name: str
+    ) -> Dict[str, Any]:
+        """Normalize arguments from list to dict format"""
+        if isinstance(raw_args, list):
+            if len(raw_args) != len(properties):
+                raise ValueError(
+                    f"Argument count mismatch for tool '{tool_name}'"
+                )
+            return dict(zip(properties, raw_args))
+        return raw_args.copy()
 
-        # --------------------------------------------------
-        # 3. EXECUTE STEPS SEQUENTIALLY
-        # --------------------------------------------------
-        # --------------------------------------------------
-        # 3. EXECUTE STEPS SEQUENTIALLY (ROBUST)
-        # --------------------------------------------------
+    def _inject_dependencies(
+        self,
+        args: Dict[str, Any],
+        previous_result: Any,
+        properties: List[str]
+    ) -> Dict[str, Any]:
+        """Inject previous results and required dependencies"""
+        # Replace PREVIOUS_RESULT placeholders
+        for k, v in args.items():
+            if v == "PREVIOUS_RESULT":
+                args[k] = previous_result
+
+        # Inject API key if required
+        if "openai_api_key" in properties:
+            args["openai_api_key"] = self.openai_api_key
+
+        return args
+
+    async def execute_step(
+        self,
+        client: Client,
+        step: Dict[str, Any],
+        step_number: int,
+        tool_index: Dict[str, Any],
+        previous_result: Any
+    ) -> Any:
+        """Execute a single tool step"""
+        tool_name = step["tool"]
+        raw_args = step.get("args", {})
+
+        tool = tool_index.get(tool_name)
+        if not tool:
+            raise RuntimeError(f"Tool '{tool_name}' not found")
+
+        schema = getattr(tool, "inputSchema", {}) or {}
+        properties = list((schema.get("properties") or {}).keys())
+
+        # Normalize and inject dependencies
+        args = self._normalize_args(raw_args, properties, tool_name)
+        args = self._inject_dependencies(args, previous_result, properties)
+
+        print(f"\n⚙️ Step {step_number}: {tool_name}")
+        print(f"Args: {args}")
+        await self._emit("step", {
+            "step": step_number,
+            "tool": tool_name,
+            "args": args
+        })
+
+        # Execute tool
+        result = await client.call_tool(tool_name, args)
+        result_data = getattr(result, "data", None)
+
+        print(f"Result: {result_data}")
+        await self._emit("step_result", {
+            "step": step_number,
+            "result": result_data
+        })
+
+        return result_data
+
+    async def execute_plan(
+        self,
+        client: Client,
+        plan: List[Dict[str, Any]],
+        tools: List
+    ) -> Any:
+        """Execute the full plan sequentially"""
         previous_result: Any = None
-
-        # Build tool index for schemas
         tool_index = {t.name: t for t in tools}
 
         for idx, step in enumerate(plan, start=1):
-            tool_name = step["tool"]
-            raw_args = step.get("args", {})
-
-            tool = tool_index.get(tool_name)
-            if not tool:
-                raise RuntimeError(f"Tool '{tool_name}' not found")
-
-            schema = getattr(tool, "inputSchema", {}) or {}
-            properties = list((schema.get("properties") or {}).keys())
-
-            # ---------------------------------------------
-            # NORMALIZE ARGS (list → dict if needed)
-            # ---------------------------------------------
-            if isinstance(raw_args, list):
-                if len(raw_args) != len(properties):
-                    raise ValueError(
-                        f"Argument count mismatch for tool '{tool_name}'"
-                    )
-                args = dict(zip(properties, raw_args))
-            else:
-                args = raw_args.copy()
-
-            # Replace PREVIOUS_RESULT placeholders
-            for k, v in args.items():
-                if v == "PREVIOUS_RESULT":
-                    args[k] = previous_result
-
-            # Inject API key only if required
-            if "openai_api_key" in properties:
-                args["openai_api_key"] = OPENAI_API_KEY
-
-            print(f"\n⚙️ Step {idx}: {tool_name}")
-            print(f"Args: {args}")
-            await emit("step", {"step": idx, "tool": tool_name, "args": args})
-
-            result = await client.call_tool(tool_name, args)
-            previous_result = getattr(result, "data", None)
-
-            print(f"Result: {previous_result}")
-            await emit("step_result", {"step": idx, "result": previous_result})
+            previous_result = await self.execute_step(
+                client, step, idx, tool_index, previous_result
+            )
 
         print("\n✅ Final Output:", previous_result)
-        await emit("final", {"result": previous_result})
+        await self._emit("final", {"result": previous_result})
 
         return previous_result
 
+    async def run(
+        self,
+        query: str,
+        stream_callback: Optional[Callable] = None
+    ) -> Any:
+        """
+        Main entry point: Run agent with query
+
+        Args:
+            query: User query to process
+            stream_callback: Optional async callback(event_type: str, data: dict)
+
+        Returns:
+            Final execution result
+        """
+        self.stream_callback = stream_callback
+        client = Client(self.mcp_endpoint)
+
+        async with client:
+            # List available tools
+            tools = await client.list_tools()
+            tools_text = self._format_tools_list(tools)
+
+            # Generate execution plan
+            plan = await self.generate_plan(query, tools, tools_text)
+            if not plan:
+                return None
+
+            # Execute plan
+            result = await self.execute_plan(client, plan, tools)
+            return result
+
+
+# Convenience function for backward compatibility
+async def run_client(user_query: str, stream_callback=None):
+    """
+    Legacy function wrapper for backward compatibility
+    """
+    orchestrator = MCPAgentOrchestrator()
+    return await orchestrator.run(user_query, stream_callback)
+
 
 if __name__ == "__main__":
-    asyncio.run(
-        run_client("first add 5 and 8 then multiply it by 6")
-    )
+    async def main():
+        orchestrator = MCPAgentOrchestrator()
+        result = await orchestrator.run(
+            "first add 5 and 8 then multiply it by 6"
+        )
+        print(f"\n🎯 Final Result: {result}")
+
+    asyncio.run(main())
