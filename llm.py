@@ -98,6 +98,14 @@ class ChatMMC:
         print(f"Input Messages Count: {len(messages)}")
         print(f"Message Types: {[type(m).__name__ for m in messages]}")
 
+        # Debug: Show which messages might be problematic
+        for i, msg in enumerate(messages):
+            msg_type = type(msg).__name__
+            if not isinstance(msg, dict):
+                print(f"  Message {i}: {msg_type} (needs conversion)")
+            else:
+                print(f"  Message {i}: dict (already formatted)")
+
         # Handle langchain message objects - ensure they're converted to dicts
         try:
             formatted_messages = self._format_messages(messages)
@@ -107,14 +115,26 @@ class ChatMMC:
                 print(f"  {i}. [{msg.get('role', 'unknown')}] {content_preview}{'...' if len(str(msg.get('content', ''))) > 100 else ''}")
 
             # Validate that all messages are JSON serializable
+            print(f"\nValidating messages are JSON serializable...")
             for i, msg in enumerate(formatted_messages):
                 if not isinstance(msg, dict):
                     raise ValueError(f"Message {i} is not a dict: {type(msg).__name__}")
                 if 'role' not in msg or 'content' not in msg:
                     raise ValueError(f"Message {i} missing 'role' or 'content': {msg}")
-                # Ensure content is a string
+
+                # Ensure both role and content are strings
+                if not isinstance(msg['role'], str):
+                    msg['role'] = str(msg['role'])
                 if not isinstance(msg['content'], str):
                     msg['content'] = str(msg['content'])
+
+                # Test JSON serialization of each message
+                try:
+                    json.dumps(msg)
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"Message {i} is not JSON serializable: {e}")
+
+            print(f"✓ All messages validated successfully")
 
         except Exception as e:
             print(f"\n{'='*60}")
@@ -139,10 +159,16 @@ class ChatMMC:
         if self.max_tokens or kwargs.get("max_tokens"):
             payload["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
 
-        # Add any additional kwargs
+        # Add any additional kwargs - ensure they're JSON serializable
         for key, value in kwargs.items():
             if key not in ["temperature", "max_tokens"]:
-                payload[key] = value
+                # Skip non-serializable values
+                try:
+                    json.dumps(value)
+                    payload[key] = value
+                except (TypeError, ValueError):
+                    print(f"⚠️  Warning: Skipping non-serializable kwarg '{key}' of type {type(value).__name__}")
+                    continue
 
         # Make API request
         headers = {
@@ -163,19 +189,29 @@ class ChatMMC:
             print(f"Payload: {payload_json[:500]}...")
         except TypeError as e:
             print(f"\n{'='*60}")
-            print(f"❌ JSON SERIALIZATION ERROR")
+            print(f"❌ JSON SERIALIZATION ERROR IN PAYLOAD")
             print(f"{'='*60}")
             print(f"Payload cannot be serialized to JSON")
             print(f"Error: {str(e)}")
             print(f"\nPayload structure:")
             for key, value in payload.items():
-                print(f"  {key}: {type(value).__name__}")
-                if key == "messages":
-                    for i, msg in enumerate(value):
-                        print(f"    Message {i}: {type(msg).__name__}")
-                        if isinstance(msg, dict):
-                            for k, v in msg.items():
-                                print(f"      {k}: {type(v).__name__} = {str(v)[:50]}")
+                try:
+                    json.dumps(value)
+                    print(f"  ✓ {key}: {type(value).__name__} (serializable)")
+                except TypeError:
+                    print(f"  ✗ {key}: {type(value).__name__} (NOT serializable)")
+                    if key == "messages":
+                        for i, msg in enumerate(value):
+                            print(f"    Message {i}: {type(msg).__name__}")
+                            if isinstance(msg, dict):
+                                for k, v in msg.items():
+                                    try:
+                                        json.dumps(v)
+                                        print(f"      ✓ {k}: {type(v).__name__}")
+                                    except TypeError:
+                                        print(f"      ✗ {k}: {type(v).__name__} (NOT serializable) = {str(v)[:50]}")
+                            else:
+                                print(f"      Full message: {msg}")
             print(f"\nStack Trace:")
             traceback.print_exc()
             print(f"{'='*60}\n")
@@ -373,20 +409,22 @@ class ChatMMC:
             for idx, msg in enumerate(messages, 1):
                 try:
                     if isinstance(msg, dict):
-                        # Already a dictionary - but ensure content is a string
+                        # Already a dictionary - create a new dict with string values
                         print(f"  Message {idx}: Dict format - role={msg.get('role', 'unknown')}")
-                        formatted.append({
-                            "role": msg.get("role", "user"),
+                        new_msg = {
+                            "role": str(msg.get("role", "user")),
                             "content": str(msg.get("content", ""))
-                        })
+                        }
+                        formatted.append(new_msg)
                     elif isinstance(msg, tuple) and len(msg) == 2:
                         # Tuple format: (role, content)
                         role = msg[0] if msg[0] in ["system", "user", "assistant"] else "user"
                         print(f"  Message {idx}: Tuple format - role={role}")
-                        formatted.append({
-                            "role": role,
+                        new_msg = {
+                            "role": str(role),
                             "content": str(msg[1])
-                        })
+                        }
+                        formatted.append(new_msg)
                     else:
                         # Handle LangChain message objects
                         msg_type = type(msg).__name__.lower()
@@ -423,10 +461,11 @@ class ChatMMC:
 
                         print(f"  Message {idx}: LangChain {msg_type} - role={role}")
 
-                        formatted.append({
+                        new_msg = {
                             "role": str(role),
-                            "content": content
-                        })
+                            "content": str(content)
+                        }
+                        formatted.append(new_msg)
 
                 except Exception as e:
                     print(f"\n{'='*60}")
@@ -441,6 +480,17 @@ class ChatMMC:
                     raise ValueError(f"Failed to format message {idx}: {str(e)}")
 
             print(f"✓ Successfully formatted {len(formatted)} messages")
+
+            # Final verification - ensure everything is a plain dict
+            print(f"\nFinal verification of formatted messages...")
+            for i, msg in enumerate(formatted):
+                if not isinstance(msg, dict):
+                    raise ValueError(f"Formatted message {i} is not a dict: {type(msg).__name__}")
+                for key, value in msg.items():
+                    if not isinstance(value, str):
+                        raise ValueError(f"Formatted message {i}['{key}'] is not a string: {type(value).__name__}")
+            print(f"✓ All formatted messages verified as plain dicts with string values")
+
             return formatted
 
         except Exception as e:
@@ -451,6 +501,10 @@ class ChatMMC:
             print(f"Error Message: {str(e)}")
             print(f"Total messages: {len(messages)}")
             print(f"Successfully formatted: {len(formatted)}")
+            if formatted:
+                print(f"\nFormatted messages so far:")
+                for i, msg in enumerate(formatted):
+                    print(f"  {i}: {type(msg).__name__} = {msg if isinstance(msg, dict) else str(msg)[:100]}")
             print(f"\nStack Trace:")
             traceback.print_exc()
             print(f"{'='*60}\n")
