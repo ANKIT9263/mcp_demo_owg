@@ -29,7 +29,7 @@ def create_mcp_server() -> FastMCP:
     """Create a single MCP server and load all tool modules."""
     mcp = FastMCP("IntegratedTools")
 
-    tool_modules = ["generic_tools"]
+    tool_modules = ["generic_tools", "math_tools"]
 
     for module_name in tool_modules:
         module_path = f"tools.{module_name}"

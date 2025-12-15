@@ -30,7 +30,8 @@ class MCPAgentOrchestrator:
                     "- Output must be a JSON list\n"
                     "- Each item must contain: tool, args\n"
                     "- If a step depends on the previous result, "
-                    "use the literal string PREVIOUS_RESULT as a value\n"
+                    'use the string "PREVIOUS_RESULT" (with quotes) as a value\n'
+                    "- Always quote string values in JSON\n"
                 ),
             ),
             (
@@ -80,6 +81,19 @@ class MCPAgentOrchestrator:
             lines = cleaned_plan.split('\n')
             lines = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
             cleaned_plan = '\n'.join(lines)
+
+        # Fix unquoted PREVIOUS_RESULT (convert to string)
+        import re
+        cleaned_plan = re.sub(
+            r':\s*PREVIOUS_RESULT\s*([,\]\}])',
+            r': "PREVIOUS_RESULT"\1',
+            cleaned_plan
+        )
+        cleaned_plan = re.sub(
+            r'\[\s*PREVIOUS_RESULT\s*([,\]])',
+            r'["PREVIOUS_RESULT"\1',
+            cleaned_plan
+        )
 
         return json.loads(cleaned_plan)
 
