@@ -98,12 +98,35 @@ class ChatMMC:
         print(f"Input Messages Count: {len(messages)}")
         print(f"Message Types: {[type(m).__name__ for m in messages]}")
 
-        # Handle langchain message objects
-        formatted_messages = self._format_messages(messages)
-        print(f"\nFormatted Messages:")
-        for i, msg in enumerate(formatted_messages, 1):
-            content_preview = str(msg.get('content', ''))[:100]
-            print(f"  {i}. [{msg.get('role', 'unknown')}] {content_preview}{'...' if len(str(msg.get('content', ''))) > 100 else ''}")
+        # Handle langchain message objects - ensure they're converted to dicts
+        try:
+            formatted_messages = self._format_messages(messages)
+            print(f"\nFormatted Messages:")
+            for i, msg in enumerate(formatted_messages, 1):
+                content_preview = str(msg.get('content', ''))[:100]
+                print(f"  {i}. [{msg.get('role', 'unknown')}] {content_preview}{'...' if len(str(msg.get('content', ''))) > 100 else ''}")
+
+            # Validate that all messages are JSON serializable
+            for i, msg in enumerate(formatted_messages):
+                if not isinstance(msg, dict):
+                    raise ValueError(f"Message {i} is not a dict: {type(msg).__name__}")
+                if 'role' not in msg or 'content' not in msg:
+                    raise ValueError(f"Message {i} missing 'role' or 'content': {msg}")
+                # Ensure content is a string
+                if not isinstance(msg['content'], str):
+                    msg['content'] = str(msg['content'])
+
+        except Exception as e:
+            print(f"\n{'='*60}")
+            print(f"❌ MESSAGE FORMATTING ERROR")
+            print(f"{'='*60}")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"Original Messages: {[type(m).__name__ for m in messages]}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise
 
         # Prepare request payload
         payload = {
@@ -127,13 +150,37 @@ class ChatMMC:
             "x-api-key": self.api_key
         }
 
-        # Log API request details
+        # Log API request details and validate JSON serialization
         print(f"\n{'='*60}")
         print(f"Making API Request")
         print(f"{'='*60}")
         print(f"URL: {self.endpoint}")
         print(f"Headers: Content-Type: application/json, x-api-key: {self.api_key[:10]}...{self.api_key[-4:]}")
-        print(f"Payload: {json.dumps(payload, indent=2)[:500]}...")
+
+        # Validate payload is JSON serializable before making request
+        try:
+            payload_json = json.dumps(payload, indent=2)
+            print(f"Payload: {payload_json[:500]}...")
+        except TypeError as e:
+            print(f"\n{'='*60}")
+            print(f"❌ JSON SERIALIZATION ERROR")
+            print(f"{'='*60}")
+            print(f"Payload cannot be serialized to JSON")
+            print(f"Error: {str(e)}")
+            print(f"\nPayload structure:")
+            for key, value in payload.items():
+                print(f"  {key}: {type(value).__name__}")
+                if key == "messages":
+                    for i, msg in enumerate(value):
+                        print(f"    Message {i}: {type(msg).__name__}")
+                        if isinstance(msg, dict):
+                            for k, v in msg.items():
+                                print(f"      {k}: {type(v).__name__} = {str(v)[:50]}")
+            print(f"\nStack Trace:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
+            raise RuntimeError(f"Payload not JSON serializable: {str(e)}")
+
         print(f"{'='*60}\n")
 
         try:
@@ -326,16 +373,19 @@ class ChatMMC:
             for idx, msg in enumerate(messages, 1):
                 try:
                     if isinstance(msg, dict):
-                        # Already a dictionary
+                        # Already a dictionary - but ensure content is a string
                         print(f"  Message {idx}: Dict format - role={msg.get('role', 'unknown')}")
-                        formatted.append(msg)
+                        formatted.append({
+                            "role": msg.get("role", "user"),
+                            "content": str(msg.get("content", ""))
+                        })
                     elif isinstance(msg, tuple) and len(msg) == 2:
                         # Tuple format: (role, content)
                         role = msg[0] if msg[0] in ["system", "user", "assistant"] else "user"
                         print(f"  Message {idx}: Tuple format - role={role}")
                         formatted.append({
                             "role": role,
-                            "content": msg[1]
+                            "content": str(msg[1])
                         })
                     else:
                         # Handle LangChain message objects
@@ -345,6 +395,9 @@ class ChatMMC:
                         if content is None:
                             # Try alternative content attribute
                             content = str(msg)
+                        else:
+                            # Ensure content is a string
+                            content = str(content)
 
                         # Map LangChain message types to roles
                         role = "user"  # default
@@ -371,7 +424,7 @@ class ChatMMC:
                         print(f"  Message {idx}: LangChain {msg_type} - role={role}")
 
                         formatted.append({
-                            "role": role,
+                            "role": str(role),
                             "content": content
                         })
 
