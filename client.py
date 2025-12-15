@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Callable
 from dotenv import load_dotenv
 from fastmcp.client import Client
 
-from langchain_openai import ChatOpenAI
+from llm import ChatMMC
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -104,7 +104,7 @@ class MCPAgentOrchestrator:
         tools_text: str
     ) -> Optional[List[Dict[str, Any]]]:
         """Generate execution plan from user query"""
-        llm = ChatOpenAI(
+        llm = ChatMMC(
             model=self.openai_model,
             temperature=0,
             api_key=self.openai_api_key,
