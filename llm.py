@@ -82,18 +82,32 @@ class ChatMMC:
             "x-api-key": self.api_key
         }
 
-        response = requests.post(
-            self.endpoint,
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
+        try:
+            response = requests.post(
+                self.endpoint,
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
 
-        response.raise_for_status()
+            response.raise_for_status()
 
-        # Parse response
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+            # Parse response - format: {"choices": [{"message": {"content": "..."}}]}
+            result = response.json()
+
+            # Extract content from the response structure
+            if "choices" in result and len(result["choices"]) > 0:
+                choice = result["choices"][0]
+                if "message" in choice and "content" in choice["message"]:
+                    return choice["message"]["content"]
+
+            # If structure doesn't match, raise error with actual response
+            raise RuntimeError(f"Unexpected API response format. Response: {json.dumps(result)[:500]}")
+
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"API request failed: {str(e)}")
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Failed to parse API response as JSON: {str(e)}")
 
     def _format_messages(self, messages: List[Any]) -> List[Dict[str, str]]:
         """
@@ -109,28 +123,49 @@ class ChatMMC:
         formatted = []
         for msg in messages:
             if isinstance(msg, dict):
+                # Already a dictionary
                 formatted.append(msg)
-            elif hasattr(msg, "role") and hasattr(msg, "content"):
-                # Langchain message object
+            elif isinstance(msg, tuple) and len(msg) == 2:
+                # Tuple format: (role, content)
                 formatted.append({
-                    "role": msg.role,
-                    "content": msg.content
-                })
-            elif hasattr(msg, "type") and hasattr(msg, "content"):
-                # Alternative langchain format
-                role_mapping = {
-                    "system": "system",
-                    "human": "user",
-                    "ai": "assistant",
-                    "user": "user",
-                    "assistant": "assistant"
-                }
-                formatted.append({
-                    "role": role_mapping.get(msg.type, msg.type),
-                    "content": msg.content
+                    "role": msg[0] if msg[0] in ["system", "user", "assistant"] else "user",
+                    "content": msg[1]
                 })
             else:
-                raise ValueError(f"Unsupported message format: {type(msg)}")
+                # Handle LangChain message objects
+                msg_type = type(msg).__name__.lower()
+                content = getattr(msg, "content", None)
+
+                if content is None:
+                    # Try alternative content attribute
+                    content = str(msg)
+
+                # Map LangChain message types to roles
+                role = "user"  # default
+                if "system" in msg_type:
+                    role = "system"
+                elif "human" in msg_type or "user" in msg_type:
+                    role = "user"
+                elif "ai" in msg_type or "assistant" in msg_type:
+                    role = "assistant"
+                elif hasattr(msg, "type"):
+                    # Try type attribute
+                    role_mapping = {
+                        "system": "system",
+                        "human": "user",
+                        "ai": "assistant",
+                        "user": "user",
+                        "assistant": "assistant"
+                    }
+                    role = role_mapping.get(msg.type, "user")
+                elif hasattr(msg, "role"):
+                    # Try role attribute
+                    role = msg.role
+
+                formatted.append({
+                    "role": role,
+                    "content": content
+                })
 
         return formatted
 
