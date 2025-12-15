@@ -185,12 +185,18 @@ class MCPAgentOrchestrator:
         args = self._normalize_args(raw_args, properties, tool_name)
         args = self._inject_dependencies(args, previous_result, properties)
 
+        # Mask sensitive data for display
+        display_args = args.copy()
+        if "openai_api_key" in display_args:
+            key = display_args["openai_api_key"]
+            display_args["openai_api_key"] = f"{key[:3]}..." if key else "***"
+
         print(f"\n⚙️ Step {step_number}: {tool_name}")
-        print(f"Args: {args}")
+        print(f"Args: {display_args}")
         await self._emit("step", {
             "step": step_number,
             "tool": tool_name,
-            "args": args
+            "args": display_args
         })
 
         # Execute tool
