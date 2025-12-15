@@ -1,92 +1,76 @@
 """
-FastAPI SSE Server for LangGraph MCP Agent
-------------------------------------------
+Basic API for MCP Agent
+-----------------------
 Run with:
     python api.py
 """
 
 import asyncio
 import json
-import os
-from pprint import pprint
-
 import uvicorn
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from starlette.responses import JSONResponse
-from typing import List, Optional
+from pydantic import BaseModel
 
-from client import run_agent
+from client import run_client
 
-app = FastAPI(title="LangGraph MCP Agent (SSE API)")
-
-# ======================================================
-# 🔸 Helper: SSE Event Formatter
-# ======================================================
-def format_sse(event: str, data: dict | str) -> str:
-    """Format an event + data as a proper SSE message."""
-    if not isinstance(data, str):
-        data = json.dumps(data, ensure_ascii=False)
-    return f"event: {event}\ndata: {data}\n\n"
+app = FastAPI(title="MCP Agent API")
 
 
-# ======================================================
-# 🔸 Event Generator for StreamingResponse
-# ======================================================
-async def event_generator(queue: asyncio.Queue):
-    """Continuously stream messages from the async queue."""
-    while True:
-        msg = await queue.get()
-
-        if msg == "[DONE]":
-            # Final completion event
-            yield format_sse("meta", {"usage": {}, "info": "stream_complete"})
-            break
-
-        if isinstance(msg, tuple) and len(msg) == 2:
-            event_name, payload = msg
-            yield format_sse(event_name, payload)
-        else:
-            # Fallback if something unstructured appears
-            yield format_sse("thinking", {"content": str(msg)})
-
-    # Heartbeat
-    yield ":\nok\nretry: 2000\n\n"
+class QueryRequest(BaseModel):
+    query: str
 
 
-# ======================================================
-# 🔸 Main Endpoint
-# ======================================================
-@app.post("/run_agent")
-async def run_agent_api(req: Request):
-    """
-    Run the LangGraph agent and stream events:
-      - thinking
-      - tool
-      - tool_result
-      - token
-      - meta
-    """
-    data = await req.json()
-    params = {
-        "query": data.get("prompt") or data.get("query") or "No prompt provided.",
-    }
+def format_sse(event: str, data: dict) -> str:
+    """Format Server-Sent Event"""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+async def event_stream(query: str):
+    """Generate SSE stream from agent execution"""
     queue = asyncio.Queue()
 
-    async def sse_send(event: str, payload: dict):
-        """Push an SSE event to the async queue."""
-        await queue.put((event, payload))
+    async def stream_callback(event_type: str, data: dict):
+        await queue.put((event_type, data))
 
-    async def orchestrator_task():
+    async def run_agent_task():
         try:
-            # Run the LangGraph agent (it will emit thinking/tool/token/etc.)
-            await run_agent(params, sse_send)
+            await run_client(query, stream_callback)
         except Exception as e:
-            await sse_send("meta", {"error": str(e)})
+            await queue.put(("error", {"message": str(e)}))
         finally:
-            await queue.put("[DONE]")
+            await queue.put(("done", {}))
 
-    asyncio.create_task(orchestrator_task())
-    return StreamingResponse(event_generator(queue), media_type="text/event-stream")
+    # Start agent task
+    asyncio.create_task(run_agent_task())
+
+    # Stream events
+    while True:
+        event_type, data = await queue.get()
+        yield format_sse(event_type, data)
+
+        if event_type == "done":
+            break
+
+
+@app.post("/run_agent")
+async def run_agent(request: QueryRequest):
+    """
+    Execute agent with streaming response
+
+    Events:
+    - plan: Execution plan
+    - step: Tool execution started
+    - step_result: Tool execution result
+    - final: Final output
+    - error: Error occurred
+    - done: Stream complete
+    """
+    return StreamingResponse(
+        event_stream(request.query),
+        media_type="text/event-stream"
+    )
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

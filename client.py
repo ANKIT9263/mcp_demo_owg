@@ -46,7 +46,15 @@ PLANNER_PROMPT = ChatPromptTemplate.from_messages(
 )
 
 
-async def run_client(user_query: str):
+async def run_client(user_query: str, stream_callback=None):
+    """
+    Run client with optional streaming callback.
+    stream_callback: async function(event_type: str, data: dict)
+    """
+    async def emit(event_type: str, data: dict):
+        if stream_callback:
+            await stream_callback(event_type, data)
+
     llm = ChatOpenAI(
         model=OPENAI_MODEL,
         temperature=0,
@@ -91,13 +99,16 @@ async def run_client(user_query: str):
 
         try:
             plan: List[Dict[str, Any]] = json.loads(cleaned_plan)
-        except Exception:
-            print("❌ Invalid planner output")
+        except Exception as e:
+            error_msg = f"❌ Invalid planner output: {str(e)}"
+            print(error_msg)
             print(raw_plan)
+            await emit("error", {"message": error_msg, "raw_output": raw_plan})
             return
 
         print("\n🧠 Execution Plan:")
         print(json.dumps(plan, indent=2))
+        await emit("plan", {"plan": plan})
 
         # --------------------------------------------------
         # 3. EXECUTE STEPS SEQUENTIALLY
@@ -144,13 +155,18 @@ async def run_client(user_query: str):
 
             print(f"\n⚙️ Step {idx}: {tool_name}")
             print(f"Args: {args}")
+            await emit("step", {"step": idx, "tool": tool_name, "args": args})
 
             result = await client.call_tool(tool_name, args)
             previous_result = getattr(result, "data", None)
 
             print(f"Result: {previous_result}")
+            await emit("step_result", {"step": idx, "result": previous_result})
 
         print("\n✅ Final Output:", previous_result)
+        await emit("final", {"result": previous_result})
+
+        return previous_result
 
 
 if __name__ == "__main__":
