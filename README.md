@@ -1,6 +1,6 @@
 # MCP Agent Demo
 
-A multi-step tool orchestration system using the Model Context Protocol (MCP), LangChain, and OpenAI. The system automatically plans and executes multi-step workflows using available tools.
+A multi-step tool orchestration system using the Model Context Protocol (MCP), LangChain, and custom LLM integration (ChatMMC). The system automatically plans and executes multi-step workflows using available tools.
 
 ## 🌟 Features
 
@@ -13,7 +13,7 @@ A multi-step tool orchestration system using the Model Context Protocol (MCP), L
 ## 📋 Prerequisites
 
 - Python 3
-- OpenAI API Key
+- MMC API Key (for internal use) or compatible LLM API endpoint
 
 ## 🚀 Installation
 
@@ -29,10 +29,22 @@ A multi-step tool orchestration system using the Model Context Protocol (MCP), L
 
 3. **Set up environment variables**
 
-   Create a `.env` file in the project root:
+   Copy the example environment file and update with your credentials:
+   ```bash
+   cp .env.example .env
+   ```
+
+   Edit `.env` with your API credentials:
    ```env
-   OPENAI_API_KEY=sk-your-api-key-here
-   OPENAI_MODEL=gpt-4o-mini
+   # Organization LLM Configuration
+   ORG_LLM_ENDPOINT=https://your-api-endpoint/chat/completions
+   ORG_LLM_API_KEY=your-api-key-here
+   ORG_LLM_MODEL=your-model-name
+   ORG_LLM_BASE_URL=https://your-api-base-url
+
+   # OpenAI Compatible Keys (used by ChatMMC)
+   OPENAI_API_KEY=your-api-key-here
+   OPENAI_MODEL=your-model-name
    ```
 
 ## 🎯 Quick Start
@@ -79,11 +91,57 @@ mcp_demo_owg/
 ├── api.py                 # FastAPI server with SSE streaming
 ├── client.py              # MCPAgentOrchestrator class
 ├── streamlit_app.py       # Streamlit chat interface
+├── llm.py                 # ChatMMC class (custom LLM integration)
 ├── tools/
-│   └── generic_tools.py   # Math and conversational tools
-├── .env                   # Environment variables (create this)
-└── README.md             # This file
+│   ├── generic_tools.py   # Conversational tools
+│   └── math_tools.py      # Math operation tools
+├── .env                   # Environment variables (create from .env.example)
+├── .env.example           # Example environment configuration
+└── README.md              # This file
 ```
+
+## 🤖 Custom LLM Integration (ChatMMC)
+
+The project uses a custom `ChatMMC` class in `llm.py` that integrates with your organization's LLM API endpoint. This class is designed as a drop-in replacement for `ChatOpenAI` from LangChain.
+
+### Features:
+- Compatible with LangChain chains and pipelines
+- Supports environment variable configuration
+- Handles both dict and LangChain message formats
+- Automatically loads credentials from `.env` file
+
+### Usage Example:
+
+```python
+from llm import ChatMMC
+
+# Initialize with defaults from .env
+llm = ChatMMC()
+
+# Or explicitly provide configuration
+llm = ChatMMC(
+    api_key="your-api-key",
+    model="your-model-name",
+    temperature=0.7
+)
+
+# Use it like ChatOpenAI
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello!"}
+]
+
+response = llm.invoke(messages)
+print(response)
+```
+
+### Environment Variables:
+
+The `ChatMMC` class reads from these environment variables in order of preference:
+
+1. `OPENAI_API_KEY` or `ORG_LLM_API_KEY` - Your API key
+2. `OPENAI_MODEL` or `ORG_LLM_MODEL` - Model name
+3. `ORG_LLM_BASE_URL` - Base URL for the API endpoint
 
 ## 🛠️ Adding New Tools
 
@@ -305,10 +363,16 @@ Execute a multi-step agent workflow.
 ## 🐛 Troubleshooting
 
 ### Issue: "Invalid planner output"
-**Solution:** The LLM is not generating valid JSON. Check your OpenAI API key and model name in `.env`.
+**Solution:** The LLM is not generating valid JSON. Check your API key and model name in `.env` file. Ensure `OPENAI_API_KEY` and `OPENAI_MODEL` are correctly set.
 
 ### Issue: "Connection refused" on port 8080
 **Solution:** Make sure the MCP server is running (`python server.py`).
+
+### Issue: LLM API connection errors
+**Solution:**
+- Verify your API endpoint is accessible: Check `ORG_LLM_BASE_URL` in `.env`
+- Confirm your API key is valid: Check `OPENAI_API_KEY` in `.env`
+- Test the endpoint manually using curl to verify connectivity
 
 ### Issue: "Module not found" error
 **Solution:** Install missing dependencies:
