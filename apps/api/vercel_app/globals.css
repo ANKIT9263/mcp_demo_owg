@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  background-color: #0f172a;
+}
+
+body {
+  background-color: #0f172a;
+  color: #f1f5f9;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+@layer components {
+  .calculator-button {
+    @apply w-full py-4 px-4 rounded-lg font-semibold text-lg transition-all duration-200;
+  }
+
+  .calculator-button-number {
+    @apply calculator-button bg-neutral/20 hover:bg-neutral/30 text-foreground;
+  }
+
+  .calculator-button-operator {
+    @apply calculator-button bg-primary hover:bg-primary/90 text-white;
+  }
+
+  .calculator-button-action {
+    @apply calculator-button bg-accent hover:bg-accent/90 text-white;
+  }
+
+  .calculator-button-equals {
+    @apply calculator-button bg-success hover:bg-success/90 text-white col-span-2;
+  }
+
+  .calculator-button-clear {
+    @apply calculator-button bg-error hover:bg-error/90 text-white;
+  }
+}
